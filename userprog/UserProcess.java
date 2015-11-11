@@ -33,7 +33,7 @@ public class UserProcess {
 			
 			// Initialize free physical memory
 			for (int i = 0; i < numPhysPages; i++) {
-				freePages[i] = new PageNode(0, i * pageSize); // TODO: change 0 to PID in part 3
+				freePages[i] = new PageNode(0, i); // TODO: change 0 to PID in part 3
 			}
 		}
 		/*
@@ -161,26 +161,35 @@ public class UserProcess {
 		Lib.assertTrue(offset >= 0 && length >= 0
 				&& offset + length <= data.length);
 		
-		// Check virtual address
-		if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
-			return 0;
-		
 		byte[] memory = Machine.processor().getMemory();
+		
+		// Read page by page in case buffer is split between pages
+		int bytes = 0;
+		while (length > 0 && offset < data.length) {
+			
+			// Check virtual address
+			if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
+				return 0;
 
-		// Calculate page number and offset
-		int vpn = vaddr / pageSize;
-		int pageOffset = vaddr % pageSize;
-		int ppn = pageTable[vpn].ppn;
-		int paddr = ppn * pageSize + pageOffset;
-
-		int amount = Math.min(length, numPages * pageSize - vaddr);
-		// TODO: Will not work for noncontiguous pages
-		for (int i = 0; i < amount; i++) {
-			data[i + offset] = memory[i + paddr];
+			// Calculate page number and offset
+			int vpn = vaddr / pageSize;
+			int ppn = pageTable[vpn].ppn;
+			int pageOffset = vaddr % pageSize;
+			int paddr = ppn * pageSize + pageOffset;
+			
+			// Copy as much data as the page size allows
+			int chunk = Math.min(Math.min(length, pageSize - pageOffset), data.length - offset);
+			System.arraycopy(memory, paddr, data, offset, chunk);
+			
+			// Update the pointers in memory and buffer
+			vaddr += chunk;
+			offset += chunk;
+			
+			// Update the transferred and remaining bytes
+			bytes += chunk;
+			length -= chunk;
 		}
-		//System.arraycopy(memory, vaddr, data, offset, amount);
-
-		return amount;
+		return bytes;
 	}
 
 	/**
@@ -224,21 +233,31 @@ public class UserProcess {
 		// Check virtual address
 		if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
 			return 0;
-		
-		// Calculate page number and offset
-		int vpn = vaddr / pageSize;
-		int pageOffset = vaddr % pageSize;
-		int ppn = pageTable[vpn].ppn;
-		int paddr = ppn * pageSize + pageOffset;
 
-		int amount = Math.min(length, numPages * pageSize - vaddr);
-		// TODO: Will not work for noncontiguous pages
-		for (int i = 0; i < amount; i++) {
-			memory[i + paddr] = data[i + offset];
+		// Write page by page in case of non-contiguous pages
+		int bytes = 0;
+		while (length > 0 && offset < data.length) {
+			
+			// Calculate page number and offset
+			int vpn = vaddr / pageSize;
+			int ppn = pageTable[vpn].ppn;
+			int pageOffset = vaddr % pageSize;
+			int paddr = ppn * pageSize + pageOffset;
+
+			// Copy as much data as the page size allows
+			int chunk = Math.min(Math.min(length, pageSize - pageOffset), data.length - offset);
+			System.arraycopy(data, offset, memory, paddr, chunk);
+			
+			// Update the pointers in memory and buffer
+			vaddr += chunk;
+			offset += chunk;
+			
+			// Update the transferred and remaining bytes
+			bytes += chunk;
+			length -= chunk;
 		}
-		//System.arraycopy(data, offset, memory, vaddr, amount);
 
-		return amount;
+		return bytes;
 	}
 
 	/**
@@ -342,7 +361,45 @@ public class UserProcess {
 			Lib.debug(dbgProcess, "\tinsufficient physical memory");
 			return false;
 		}
-		
+
+		// Initialize page table
+		pageTable = new TranslationEntry[numPages];
+		for (int i = 0; i < numPages; i++) {
+			
+			int ppn = -1;
+			
+			// Synchronize access to free pages and main memory 
+			lock.acquire();
+
+			// Allocate physical page
+			for (int j = 0; j < freePages.length; j++) {
+				if (!freePages[j].allocated) {
+					ppn = freePages[j].index;
+					freePages[j].allocated = true;
+					break;
+				}
+			}
+
+			// Free pages if main memory runs out of pages for process
+			if (ppn == -1) {
+				for (int j = 0; j < pageTable.length; j++)
+				{
+					TranslationEntry entry = pageTable[j];
+					if (entry != null) {
+						freePages[entry.ppn].allocated = false;
+						entry = null;
+					}
+				}
+				coff.close();
+				lock.release();
+				return false;
+			}
+			
+			// Load into page table and main memory
+			pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
+			lock.release();
+		}
+
 		// load sections
 		for (int s = 0; s < coff.getNumSections(); s++) {
 			CoffSection section = coff.getSection(s);
@@ -350,42 +407,15 @@ public class UserProcess {
 			Lib.debug(dbgProcess, "\tinitializing " + section.getName()
 					+ " section (" + section.getLength() + " pages)");
 
-			// Initialize page table
-			pageTable = new TranslationEntry[numPages];
-			
+			// Load section into physical address
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
-				/*
-				int ppn = -1;
-				
-				// Synchronize access to free pages and main memory 
-				lock.acquire();
-
-				// Allocate physical page
-				for (int j = 0; j < freePages.length; j++) {
-					if (!freePages[j].allocated) {
-						ppn = freePages[j].index;
-						freePages[j].allocated = true;
-						break;
-					}
-				}
-
-				// If could not find space
-				if (ppn == -1) {
-					lock.release();
-					return false;
-				}
-				
-				// Load into page table and main memory
-				pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
-				*/
-				section.loadPage(i, vpn);
-				//lock.release();
+				int ppn = pageTable[vpn].ppn;
+				section.loadPage(i, ppn);
+                if (section.isReadOnly())
+                	pageTable[vpn].readOnly = true;
 			}
 		}
-
-		for (int i = 0; i < numPages; i++)
-			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
 		
 		files[0] = UserKernel.console.openForReading();
 		files[1] = UserKernel.console.openForWriting();
@@ -442,7 +472,7 @@ public class UserProcess {
 			return -1;
 
 		// Search for available file descriptor
-		String fileName = readVirtualMemoryString(name, 256);
+		String fileName = readVirtualMemoryString(name, 255);
 		for (int fd = 2; fd < MAX_FILES; fd++) {
 			if (files[fd] == null) {
 				OpenFile file = ThreadedKernel.fileSystem.open(fileName, true);
