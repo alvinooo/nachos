@@ -25,24 +25,29 @@ public class UserProcess {
 	 * Allocate a new process.
 	 */
 	public UserProcess() {
-		/*
+		
 		if (freePages == null)
 		{
 			int numPhysPages = Machine.processor().getNumPhysPages();
+			freePages = new PageNode[numPhysPages];
+			
 			// Initialize free physical memory
-			freePages = new LinkedList<PageNode>();
 			for (int i = 0; i < numPhysPages; i++) {
+				freePages[i] = new PageNode(0, i * pageSize); // TODO: change 0 to PID in part 3
 			}
-		}*/
+		}
+		/*
 		int numPhysPages = Machine.processor().getNumPhysPages();
 		pageTable = new TranslationEntry[numPhysPages];
 		for (int i = 0; i < numPhysPages; i++)
-			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+			//pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
 
 
 		// Allocate fd STDIN/STDOUT
 		files[0] = UserKernel.console.openForReading();
 		files[1] = UserKernel.console.openForWriting();
+		*/
+		lock = new Lock();
 	}
 
 	/**
@@ -156,19 +161,24 @@ public class UserProcess {
 		Lib.assertTrue(offset >= 0 && length >= 0
 				&& offset + length <= data.length);
 		
-		// Old stuff
+		// Check virtual address
+		if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
+			return 0;
+		
 		byte[] memory = Machine.processor().getMemory();
 
 		// Calculate page number and offset
-		//int page = offset / pageSize + 1;
-		//int pageOffset = offset % pageSize;
-		
-		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
-			return 0;
+		int vpn = vaddr / pageSize;
+		int pageOffset = vaddr % pageSize;
+		int ppn = pageTable[vpn].ppn;
+		int paddr = ppn * pageSize + pageOffset;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(memory, vaddr, data, offset, amount);
+		int amount = Math.min(length, numPages * pageSize - vaddr);
+		// TODO: Will not work for noncontiguous pages
+		for (int i = 0; i < amount; i++) {
+			data[i + offset] = memory[i + paddr];
+		}
+		//System.arraycopy(memory, vaddr, data, offset, amount);
 
 		return amount;
 	}
@@ -211,12 +221,22 @@ public class UserProcess {
 
 		byte[] memory = Machine.processor().getMemory();
 
-		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
+		// Check virtual address
+		if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
 			return 0;
+		
+		// Calculate page number and offset
+		int vpn = vaddr / pageSize;
+		int pageOffset = vaddr % pageSize;
+		int ppn = pageTable[vpn].ppn;
+		int paddr = ppn * pageSize + pageOffset;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(data, offset, memory, vaddr, amount);
+		int amount = Math.min(length, numPages * pageSize - vaddr);
+		// TODO: Will not work for noncontiguous pages
+		for (int i = 0; i < amount; i++) {
+			memory[i + paddr] = data[i + offset];
+		}
+		//System.arraycopy(data, offset, memory, vaddr, amount);
 
 		return amount;
 	}
@@ -322,7 +342,7 @@ public class UserProcess {
 			Lib.debug(dbgProcess, "\tinsufficient physical memory");
 			return false;
 		}
-
+		
 		// load sections
 		for (int s = 0; s < coff.getNumSections(); s++) {
 			CoffSection section = coff.getSection(s);
@@ -330,15 +350,45 @@ public class UserProcess {
 			Lib.debug(dbgProcess, "\tinitializing " + section.getName()
 					+ " section (" + section.getLength() + " pages)");
 
+			// Initialize page table
+			pageTable = new TranslationEntry[numPages];
+			
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
+				/*
+				int ppn = -1;
+				
+				// Synchronize access to free pages and main memory 
+				lock.acquire();
 
-				// Acquire lock
-				// for now, just assume virtual addresses=physical addresses
+				// Allocate physical page
+				for (int j = 0; j < freePages.length; j++) {
+					if (!freePages[j].allocated) {
+						ppn = freePages[j].index;
+						freePages[j].allocated = true;
+						break;
+					}
+				}
+
+				// If could not find space
+				if (ppn == -1) {
+					lock.release();
+					return false;
+				}
+				
+				// Load into page table and main memory
+				pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
+				*/
 				section.loadPage(i, vpn);
-				// Release lock
+				//lock.release();
 			}
 		}
+
+		for (int i = 0; i < numPages; i++)
+			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+		
+		files[0] = UserKernel.console.openForReading();
+		files[1] = UserKernel.console.openForWriting();
 
 		return true;
 	}
@@ -444,8 +494,8 @@ public class UserProcess {
 		if (fd < 0 || fd > MAX_FILES - 1 || files[fd] == null || ptr < 0
 				|| amount < 0
 				|| ptr > numPages * pageSize - 1
-				|| amount > numPages * pageSize - 1
-				|| ptr + amount > numPages * pageSize - 1)
+				/*|| amount > numPages * pageSize - 1
+				|| ptr + amount > numPages * pageSize - 1*/)
 			return -1;
 
 		// Read from STDIN or physical memory
@@ -468,8 +518,8 @@ public class UserProcess {
 		if (fd < 0 || fd > MAX_FILES - 1 || files[fd] == null || ptr < 0
 				|| amount < 0
 				|| ptr > numPages * pageSize - 1
-				|| amount > numPages * pageSize - 1
-				|| ptr + amount > numPages * pageSize - 1)
+				/*|| amount > numPages * pageSize - 1
+				|| ptr + amount > numPages * pageSize - 1*/)
 			return -1;
 
 		// Read buffer from virtual memory
@@ -659,11 +709,20 @@ public class UserProcess {
 
 	/** The node for the free page data structure */
 	private class PageNode {
-		private boolean allocated;
-		public byte[] page;
+		public PageNode(int PID, int index) {
+			this.PID = PID;
+			this.allocated = false;
+			this.index = index;
+		}
+		public int PID;
+		public boolean allocated;
+		public int index;
 	}
 	/** The free page data structure */
-	public static LinkedList<PageNode> freePages = null;
+	public static PageNode[] freePages;
+	
+	/** Lock to synchronize free page data structure */
+	public static Lock lock;
 	
 	/** This process's page table. */
 	protected TranslationEntry[] pageTable;
