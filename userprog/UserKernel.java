@@ -99,8 +99,6 @@ public class UserKernel extends ThreadedKernel {
 		String shellProgram = Machine.getShellProgramName();
 		if (process.execute(shellProgram, new String[] {}))
 			KThread.currentThread().finish();
-		else
-			System.out.println("Not enough RAM to run process\n");
 	}
 
 	/**

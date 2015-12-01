@@ -3,6 +3,8 @@ package nachos.userprog;
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
+import nachos.vm.VMKernel;
+import nachos.vm.VMProcess;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -26,14 +28,13 @@ public class UserProcess {
 	 * Allocate a new process.
 	 */
 	public UserProcess() {
-		
+
 		if (processLock == null)
 			processLock = new Lock();
-		
-		if (freePages == null)
-		{
+
+		if (freePages == null) {
 			int numPhysPages = Machine.processor().getNumPhysPages();
-			
+
 			// Initialize free physical memory
 			freePages = new LinkedList<PageNode>();
 			for (int i = 0; i < numPhysPages; i++) {
@@ -47,11 +48,11 @@ public class UserProcess {
 		PID = CurrentPID++;
 		children = new HashMap<Integer, UserProcess>();
 
-        int numPhysPages = Machine.processor().getNumPhysPages();
-        pageTable = new TranslationEntry[numPhysPages];
-        for (int i=0; i<numPhysPages; i++)
-            pageTable[i] = new TranslationEntry(i,i, true,false,false,false);
-		
+		int numPhysPages = Machine.processor().getNumPhysPages();
+		pageTable = new TranslationEntry[numPhysPages];
+		for (int i = 0; i < numPhysPages; i++)
+			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+
 		files[0] = UserKernel.console.openForReading();
 		files[1] = UserKernel.console.openForWriting();
 	}
@@ -79,7 +80,7 @@ public class UserProcess {
 	 */
 	public boolean execute(String name, String[] args) {
 		if (!load(name, args))
- 			return false;
+			return false;
 
 		thread = new UThread(this);
 		thread.setName(name).fork();
@@ -167,31 +168,36 @@ public class UserProcess {
 	public int readVirtualMemory(int vaddr, byte[] data, int offset, int length) {
 		Lib.assertTrue(offset >= 0 && length >= 0
 				&& offset + length <= data.length);
-		
+
 		byte[] memory = Machine.processor().getMemory();
-		
+
 		// Read page by page in case buffer is split between pages
 		int bytes = 0;
 		while (length > 0 && offset < data.length) {
-			
+
 			// Check virtual address
 			if (vaddr < 0 || vaddr >= numPages * pageSize - 1)
 				return 0;
 
 			// Calculate page number and offset
 			int vpn = Processor.pageFromAddress(vaddr);
+
+			// Handle invalid pages
+			if (!pageTable[vpn].valid)
+				handlePageFault(vpn);
+
 			int ppn = pageTable[vpn].ppn;
 			int pageOffset = Processor.offsetFromAddress(vaddr);
 			int paddr = ppn * pageSize + pageOffset;
-			
+
 			// Copy as much data as the page size allows
-			int chunk = Math.min(Math.min(length, pageSize - pageOffset), data.length - offset);
+			int chunk = Math.min(length, pageSize - pageOffset);
 			System.arraycopy(memory, paddr, data, offset, chunk);
-			
+
 			// Update the pointers in memory and buffer
 			vaddr += chunk;
 			offset += chunk;
-			
+
 			// Update the transferred and remaining bytes
 			bytes += chunk;
 			length -= chunk;
@@ -244,21 +250,30 @@ public class UserProcess {
 		// Write page by page in case of non-contiguous pages
 		int bytes = 0;
 		while (length > 0 && offset < data.length) {
-			
+
 			// Calculate page number and offset
 			int vpn = Processor.pageFromAddress(vaddr);
+
+			// Handle invalid pages
+			if (!pageTable[vpn].valid)
+				handlePageFault(vpn);
+
 			int ppn = pageTable[vpn].ppn;
 			int pageOffset = Processor.offsetFromAddress(vaddr);
 			int paddr = ppn * pageSize + pageOffset;
 
+			// Check read-only
+			if (pageTable[vpn].readOnly)
+				return -1;
+
 			// Copy as much data as the page size allows
-			int chunk = Math.min(Math.min(length, pageSize - pageOffset), data.length - offset);
+			int chunk = Math.min(length, pageSize - pageOffset);
 			System.arraycopy(data, offset, memory, paddr, chunk);
-			
+
 			// Update the pointers in memory and buffer
 			vaddr += chunk;
 			offset += chunk;
-			
+
 			// Update the transferred and remaining bytes
 			bytes += chunk;
 			length -= chunk;
@@ -372,12 +387,12 @@ public class UserProcess {
 		// Initialize page table
 		pageTable = new TranslationEntry[numPages];
 
-		// Synchronize access to free pages and main memory 
+		// Synchronize access to free pages and main memory
 		memlock.acquire();
 		for (int i = 0; i < numPages; i++) {
-			
+
 			int ppn;
-			
+
 			// Free pages if main memory runs out of pages for process
 			if (freePages.isEmpty()) {
 				memlock.release();
@@ -385,15 +400,16 @@ public class UserProcess {
 				coff.close();
 				return false;
 			}
-			
+
 			// Load a free page into page table
 			PageNode page = freePages.removeFirst();
 			page.PID = PID;
 			pages.add(page);
 			ppn = page.index;
-			
+
 			// Load into page table and main memory
-			pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
+			pageTable[i] = new TranslationEntry(i, ppn, true, false, false,
+					false);
 		}
 		memlock.release();
 
@@ -409,11 +425,11 @@ public class UserProcess {
 				int vpn = section.getFirstVPN() + i;
 				int ppn = pageTable[vpn].ppn;
 				section.loadPage(i, ppn);
-                if (section.isReadOnly())
-                	pageTable[vpn].readOnly = true;
+				if (section.isReadOnly())
+					pageTable[vpn].readOnly = true;
 			}
 		}
-		
+
 		processLock.acquire();
 		numProcesses++;
 		processLock.release();
@@ -462,7 +478,7 @@ public class UserProcess {
 
 		if (PID != 0)
 			return 0;
-		
+
 		Machine.halt();
 
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
@@ -470,31 +486,31 @@ public class UserProcess {
 	}
 
 	/**
-	 * Handle the exit() system call.
-	 * And helper finish function
+	 * Handle the exit() system call. And helper finish function
 	 */
 	private void handleExit(int status) {
+		System.out.println("status = " + status); // TODO: remove
 		if (parent != null)
 			parent.children.get(PID).exit = status;
 		finish();
 	}
-	
+
 	private void finish() {
-		
+
 		// Clean up
 		for (int i = 0; i < MAX_FILES; i++)
 			handleClose(i);
 		unloadSections();
 		coff.close();
-		
+
 		processLock.acquire();
 		numProcesses--;
 		processLock.release();
-		
+
 		// Last process
 		if (numProcesses == 0)
 			UserKernel.kernel.terminate();
-		
+
 		// Wake up existing parent thread
 		UThread.finish();
 	}
@@ -503,12 +519,13 @@ public class UserProcess {
 	 * Handle the exec() system call.
 	 */
 	private int handleExec(int filename, int argc, int argv) {
-		if (filename <= 0 || filename > numPages * pageSize - 1 || argc < 0 || argv < 0)
+		if (filename <= 0 || filename > numPages * pageSize - 1 || argc < 0
+				|| argv < 0)
 			return -1;
-		
+
 		// Read the process name
 		String file = readVirtualMemoryString(filename, 255);
-		
+
 		// Read in the arguments
 		String[] split = new String[argc];
 		byte ptr[] = new byte[4];
@@ -518,7 +535,7 @@ public class UserProcess {
 			if (split[i] == null)
 				return -1;
 		}
-		
+
 		// Create and execute child process
 		UserProcess child = new UserProcess();
 		child.parent = this;
@@ -529,32 +546,32 @@ public class UserProcess {
 
 		return -1;
 	}
-	
+
 	/**
 	 * Handle the join() system call.
 	 */
 	private int handleJoin(int processID, int statusPtr) {
-		
+
 		// Validate parameters
 		if (processID < 0 || statusPtr < 0)
 			return -1;
-		
+
 		// Join the child
 		UserProcess child = children.get(processID);
 
 		if (child == null)
 			return -1;
-		
+
 		child.thread.join();
-		
+
 		// Write the exit code to the parent process
 		children.remove(processID);
 		writeVirtualMemory(statusPtr, Lib.bytesFromInt(child.exit));
 
 		// Check exit status
-		return child.exit != -1 ? 1: 0;
+		return child.exit != -1 ? 1 : 0;
 	}
-	
+
 	/**
 	 * Handle the creat() system call.
 	 */
@@ -609,20 +626,34 @@ public class UserProcess {
 	 * Handle the read() system call.
 	 */
 	private int handleRead(int fd, int ptr, int amount) {
-		byte buffer[];
+		byte buffer[] = new byte[pageSize];
 
 		// Validate parameters
 		if (fd < 0 || fd > MAX_FILES - 1 || files[fd] == null || ptr < 0
-				|| amount < 0
-				|| ptr > numPages * pageSize - 1)
+				|| amount < 0 || ptr > numPages * pageSize - 1
+				|| ptr + amount >= numPages * pageSize)
 			return -1;
 
-		// Read from STDIN or physical memory
-		buffer = new byte[amount];
-		int transferred = files[fd].read(buffer, 0, amount);
+		int transferred = 0;
+		while (amount > 0) {
 
-		// Write buffer to virtual memory
-		writeVirtualMemory(ptr, buffer);
+			int size = Math.min(pageSize, amount);
+
+			// Read from file or STDIN
+			int read = files[fd].read(buffer, 0, size);
+			if (read == -1)
+				return -1;
+
+			// Write buffer to virtual memory
+			int wrote = writeVirtualMemory(ptr, buffer, 0, read);
+			if (wrote == -1 || wrote < read)
+				return -1;
+			transferred += read;
+			ptr += read;
+			amount -= read;
+			if (read < size)
+				break;
+		}
 		return transferred;
 	}
 
@@ -630,20 +661,37 @@ public class UserProcess {
 	 * Handle the write() system call.
 	 */
 	private int handleWrite(int fd, int ptr, int amount) {
-		byte buffer[];
+		byte buffer[] = new byte[pageSize];
 
 		// Validate parameters
 		if (fd < 0 || fd > MAX_FILES - 1 || files[fd] == null || ptr < 0
-				|| amount < 0
-				|| ptr > numPages * pageSize - 1)
+				|| amount < 0 || ptr > numPages * pageSize - 1
+				|| ptr + amount >= numPages * pageSize)
 			return -1;
 
 		// Read buffer from virtual memory
-		buffer = new byte[amount];
-		readVirtualMemory(ptr, buffer);
+		int transferred = 0;
+		while (amount > 0) {
 
-		// Write to STDOUT or physical memory
-		return files[fd].write(buffer, 0, amount);
+			int size = Math.min(pageSize, amount);
+
+			// Read buffer from virtual memory
+			int read = readVirtualMemory(ptr, buffer, 0, size);
+			if (read == -1)
+				return -1;
+
+			// Write to STDOUT or disk
+			int wrote = files[fd].write(buffer, 0, read);
+			if (wrote == -1 || wrote < read)
+				return -1;
+			transferred += read;
+			ptr += read;
+			amount -= read;
+			if (read < size)
+				break;
+		}
+
+		return transferred;
 	}
 
 	/**
@@ -784,7 +832,6 @@ public class UserProcess {
 			return handleUnlink(a0);
 		default:
 			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
-			//finish();
 			Lib.assertNotReached("Unknown system call!");
 		}
 		return 0;
@@ -815,53 +862,176 @@ public class UserProcess {
 		default:
 			Lib.debug(dbgProcess, "Unexpected exception: "
 					+ Processor.exceptionNames[cause]);
+			finish();
 			Lib.assertNotReached("Unexpected exception");
 		}
 	}
-	
+
+	protected TranslationEntry handlePageFault(int vpn) {
+
+		TranslationEntry entry;
+		Machine.stats.numPageFaults++;
+		VMKernel.Swapper swapper = VMKernel.swapper;
+		VMKernel.IPT ipt = swapper.getIPT();
+		int ppn = ipt.getPPN();
+		int out = -1;
+
+		// Allocate page
+		/*
+		if (swapper.hasSwapPage(pageTable[vpn])) {
+			VMKernel.PageFrame pageFrame = ipt.getPage(ppn);
+			if (pageFrame != null)
+				out = ipt.getVPN(ppn);
+			//entry = allocateSwapPage(vpn, -1, ppn, swapper);
+			entry = pageTable[vpn];
+
+			// Read page from swap file
+			swapper.readSwap(entry);
+
+			entry.valid = true;
+			entry.ppn = ppn;
+		} else {
+			entry = allocatePhysPage(vpn, ppn);
+		}
+		*/
+		entry = allocatePhysPage(vpn, ppn);
+
+		// Invalidate evicted PTE if necessary
+		if (out >= 0) {
+			pageTable[out].valid = false;
+
+			// Sync TLB
+			Processor processor = Machine.processor();
+			for (int i = 0; i < processor.getTLBSize(); i++) {
+				TranslationEntry TLBEntry = processor.readTLBEntry(i);
+				if (TLBEntry.ppn == ppn && TLBEntry.valid) {
+					TLBEntry.valid = false;
+					processor.writeTLBEntry(i, TLBEntry);
+					break;
+				}
+			}
+		}
+
+		// Sync PTE/IPT
+		pageTable[vpn] = new TranslationEntry(entry);
+		ipt.update(pageTable[vpn].ppn, (VMProcess) this, new TranslationEntry(
+				pageTable[vpn]));
+		for (int i = 0; i < numPages; i++)
+			System.out.println("PTE vpn: " + pageTable[i].vpn + " ppn: "
+					+ pageTable[i].ppn + " valid: " + pageTable[i].valid
+					+ " readOnly: " + pageTable[i].readOnly + " dirty: "
+					+ pageTable[i].dirty);
+		return entry;
+	}
+
+	protected TranslationEntry allocateSwapPage(int vpnIn, int vpnOut, int ppn,
+			VMKernel.Swapper swapper) {
+
+		// Check if there is a page to evict
+		if (vpnOut >= 0) {
+			TranslationEntry evict = swapper.getIPT().getProcess(ppn).pageTable[vpnOut];
+			evict.valid = false;
+			evict.ppn = -1;
+
+			// Write dirty page to swap file
+			if (evict.dirty) {
+				swapper.writeSwap(evict);
+			}
+		}
+
+		TranslationEntry replace = pageTable[vpnIn];
+
+		// Read page from swap file
+		swapper.readSwap(replace);
+
+		replace.valid = true;
+		replace.ppn = ppn;
+
+		return replace;
+	}
+
+	protected TranslationEntry allocatePhysPage(int vpn, int ppn) {
+
+		// Check if page is coff or stack
+		if (vpn < numPages - stackPages/*pageTable[vpn].readOnly*/) {
+			return allocateCodePage(vpn, ppn);
+		} else {
+			return allocateStackPage(vpn, ppn);
+		}
+	}
+
+	protected TranslationEntry allocateCodePage(int vpn, int ppn) {
+		Machine.stats.numCOFFReads++;
+		CoffSection section = coff.getSection(coffPages[vpn].section);
+		section.loadPage(coffPages[vpn].spn, ppn);
+		return new TranslationEntry(vpn, ppn, true, section.isReadOnly(), false, false);
+	}
+
+	protected TranslationEntry allocateStackPage(int vpn, int ppn) {
+		byte[] memory = Machine.processor().getMemory();
+		int address = Processor.makeAddress(ppn, 0);
+		for (int i = address; i < address + Processor.pageSize; i++)
+			memory[i] = 0;
+		return new TranslationEntry(vpn, ppn, true, false, false, false);
+	}
+
+	/** Keeps track of coff section numbers and vpns */
+	public class CoffPage {
+		public CoffPage(int section, int spn) {
+			this.section = section;
+			this.spn = spn;
+		}
+
+		public int section;
+		public int spn;
+	}
+
+	protected CoffPage[] coffPages;
+
 	/** Process count and lock */
 	protected static int numProcesses;
-	
+
 	protected static Lock processLock;
 
 	/** The program being run by this process. */
 	protected Coff coff;
-	
+
 	/** PID and PID counter */
-	protected int PID;
-	
+	public int PID;
+
 	protected static int CurrentPID;
-	
+
 	/** Process thread */
 	protected UThread thread;
-	
+
 	/** Exit status */
 	protected int exit;
-	
+
 	/** Child processes data structure */
 	protected HashMap<Integer, UserProcess> children;
-	
+
 	/** Reference to parent pointer to wake after join */
 	protected UserProcess parent;
 
 	/** The node for the free page data structure */
-	protected class PageNode {
+	public class PageNode {
 		PageNode(int index) {
 			this.PID = 0;
 			this.index = index;
 		}
-		protected int PID;
-		protected int index;
+
+		public int PID;
+		public int index;
 	}
-	
+
 	/** Allocated pages */
 	protected LinkedList<PageNode> pages;
-	
-	/** The free page data structure and lock*/
-	protected static LinkedList<PageNode> freePages;
-	
+
+	/** The free page data structure and lock */
+	public static LinkedList<PageNode> freePages;
+
 	protected static Lock memlock;
-	
+
 	/** This process's page table. */
 	protected TranslationEntry[] pageTable;
 
