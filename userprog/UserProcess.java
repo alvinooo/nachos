@@ -894,6 +894,9 @@ public class UserProcess {
 			entry = allocatePhysPage(vpn, ppn);
 		}
 		*/
+		VMKernel.PageFrame pageFrame = ipt.getPage(ppn);
+		if (pageFrame != null)
+			out = ipt.getVPN(ppn);
 		entry = allocatePhysPage(vpn, ppn);
 
 		// Invalidate evicted PTE if necessary
