@@ -31,7 +31,7 @@ public class VMKernel extends UserKernel {
 	 * Test this kernel.
 	 */
 	public void selfTest() {
-		super.selfTest();
+		//super.selfTest();
 	}
 
 	/**
@@ -54,37 +54,46 @@ public class VMKernel extends UserKernel {
 			swapperinos = ThreadedKernel.fileSystem.open("swapperinos", true); // TODO: remove later
 			close();
 			swapperinos = ThreadedKernel.fileSystem.open("swapperinos", true);
-			swapIndex = 0;
-			swapPages = new LinkedList<Integer>();
-			int physPages = Machine.processor().getNumPhysPages();
-			this.ipt = new IPT(physPages);
+			swapPages = new LinkedList<Boolean>();
+			this.ipt = new IPT(Machine.processor().getNumPhysPages());
 		}
 		
 		public IPT getIPT() {
 			return ipt;
 		}
 		
-		public boolean hasSwapPage(TranslationEntry entry) {
-			int spn = entry.ppn;
-			return spn >= 0 && spn < swapIndex && !entry.valid && !entry.readOnly;
+		public boolean inSwapFile(TranslationEntry entry, int [] spns) {
+			return !entry.valid && spns[entry.vpn] >= 0;
 		}
 		
-		public void readSwap(TranslationEntry entry) {
-			swapPages.add(entry.ppn);
-			int pos = entry.ppn * Processor.pageSize;
+		public void readSwap(int spn, int ppn) {
+			swapPages.set(spn, true);
 			byte[] memory = Machine.processor().getMemory();
-			swapperinos.read(pos, memory, entry.ppn, Processor.pageSize);
+			swapperinos.read(spn * Processor.pageSize, memory, ppn * Processor.pageSize, Processor.pageSize);
 			Machine.stats.numSwapReads++;
 		}
 		
-		public void writeSwap(TranslationEntry entry) {
-			if (swapPages.isEmpty())
-				swapPages.add(swapIndex++);
-			entry.ppn = swapPages.removeFirst();
-			int pos = entry.ppn * Processor.pageSize;
+		public int writeSwap(int ppn) {Machine.stats.numSwapWrites++;
+			int pos;
+			int size = swapPages.size();
+			
+			// Search for an open page
+			for (pos = 0; pos < size; pos++) {
+				if (swapPages.get(pos))
+				{
+					swapPages.set(pos, false);
+					break;
+				}
+			}
+			
+			// Grow swap file if necessary
+			if (pos == size)
+				swapPages.add(false);
+			
+			// Write to swap file
 			byte[] memory = Machine.processor().getMemory();
-			swapperinos.write(pos, memory, entry.ppn, Processor.pageSize);
-			Machine.stats.numSwapWrites++;
+			swapperinos.write(pos * Processor.pageSize, memory, ppn * Processor.pageSize, Processor.pageSize);
+			return pos;
 		}
 		
 		public void close() {
@@ -92,8 +101,7 @@ public class VMKernel extends UserKernel {
 			ThreadedKernel.fileSystem.remove("swapperinos");
 		}
 		private OpenFile swapperinos;
-		private int swapIndex;
-		private LinkedList<Integer> swapPages;
+		private LinkedList<Boolean> swapPages; // Keeps track of which pages are free
 		private IPT ipt;
 	}
 
@@ -122,9 +130,9 @@ public class VMKernel extends UserKernel {
 			return pages[ppn].entry.vpn;
 		}
 		
-		public int getPPN() { // TODO: handle pinned pages return -1 -> condition.sleep();
-			if (!VMProcess.freePages.isEmpty())
-				return VMProcess.freePages.removeFirst().index;
+		public int getPPN() { // TODO: handle pinned pages -> call condition.sleep() on the process, call wake when number of pinned pages <
+			if (!VMKernel.freePages.isEmpty())
+				return (int) VMKernel.freePages.removeFirst();
 			while (pages[victim].entry.used && victim < pages.length - 1) {
 				pages[victim].entry.used = false;
 				victim = (victim + 1) % pages.length;

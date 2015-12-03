@@ -24,7 +24,13 @@ public class VMProcess extends UserProcess {
 	 */
 	public void saveState() {
 		super.saveState();
-		// Flush TLB
+		Processor processor = Machine.processor();
+		int TLBsize = processor.getTLBSize();
+		for (int i = 0; i < TLBsize; i++) {
+			TranslationEntry entry = new TranslationEntry();
+			entry.valid = false;
+			processor.writeTLBEntry(i, entry);
+		}
 	}
 
 	/**
@@ -42,6 +48,9 @@ public class VMProcess extends UserProcess {
 	 */
 	protected boolean loadSections() {
 
+		int code = 0;
+		int data = 0;
+		
 		// Initialize page table
 		pageTable = new TranslationEntry[numPages];
 		for (int i = 0; i < numPages; i++)
@@ -49,13 +58,20 @@ public class VMProcess extends UserProcess {
 					false);
 
 		// Synchronize access to free pages and main memory
-		memlock.acquire();
+		VMKernel.memoryLock.acquire();
 
 		// Keep track of vpns for each section
 		int pages = 0;
-		for (int s = 0; s < coff.getNumSections(); s++)
+		for (int s = 0; s < coff.getNumSections(); s++) {
+			CoffSection section = coff.getSection(s);
+			if (section.isReadOnly())
+				code += section.getLength();
+			else
+				data += section.getLength();
 			pages += coff.getSection(s).getLength();
+		}
 		coffPages = new CoffPage[pages];
+		map = new SectionMap(numPages, code, data);
 
 		// Load coff entries
 		for (int s = 0; s < coff.getNumSections(); s++) {
@@ -66,26 +82,15 @@ public class VMProcess extends UserProcess {
 				Machine.stats.numCOFFReads++;
 				int vpn = section.getFirstVPN() + i;
 				coffPages[vpn] = new CoffPage(s, i);
-				pageTable[vpn] = new TranslationEntry(vpn, 0, false, section.isReadOnly(), false, false);
-				boolean swapped = false;
-				if (!section.isReadOnly()) {
-					section.loadPage(i, pageTable[vpn].ppn);
-					VMKernel.swapper.writeSwap(pageTable[vpn]);
-					swapped = true;
-				}
-				if (!swapped)
-					pageTable[vpn].ppn = -1;
 			}
 		}
 
-		memlock.release();
+		// Initialize swap entries
+		spns = new int[numPages];
 		for (int i = 0; i < numPages; i++)
-			System.out.println("PTE vpn: " + pageTable[i].vpn + " ppn: " + pageTable[i].ppn + " valid: " + pageTable[i].valid + " readOnly: " + pageTable[i].readOnly + " dirty: " + pageTable[i].dirty);
+			spns[i] = -1;
 
-
-		processLock.acquire();
-		numProcesses++;
-		processLock.release();
+		VMKernel.memoryLock.release();
 
 		return true;
 	}
@@ -146,9 +151,12 @@ public class VMProcess extends UserProcess {
 			lastReplaced = (lastReplaced + 1) % TLBsize;
 		
 		// Sync w/ page table
-		TranslationEntry entry = processor.readTLBEntry(lastReplaced);
-		if (entry.dirty || entry.used) {
-			pageTable[entry.vpn] = new TranslationEntry(entry); // TODO: get process
+		for (int i = 0; i < TLBsize; i++) {
+			TranslationEntry entry = processor.readTLBEntry(i);
+			if (entry.dirty || entry.used) { // TODO: multi
+				pageTable[entry.vpn].dirty = entry.dirty;
+				pageTable[entry.vpn].used = entry.used;
+			}
 		}
 		
 		// Find a page to bring in
