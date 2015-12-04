@@ -79,7 +79,6 @@ public class VMProcess extends UserProcess {
 
 			// Load section number
 			for (int i = 0; i < section.getLength(); i++) {
-				Machine.stats.numCOFFReads++;
 				int vpn = section.getFirstVPN() + i;
 				coffPages[vpn] = new CoffPage(s, i);
 			}
@@ -99,7 +98,10 @@ public class VMProcess extends UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
-		super.unloadSections();
+		for (int vpn = 0; vpn < pageTable.length; vpn++) {
+			if (pageTable[vpn].ppn >= 0)
+				VMKernel.freePages.add(new Integer(pageTable[vpn].ppn));
+		}
 	}
 
 	/**
@@ -153,9 +155,10 @@ public class VMProcess extends UserProcess {
 		// Sync w/ page table
 		for (int i = 0; i < TLBsize; i++) {
 			TranslationEntry entry = processor.readTLBEntry(i);
-			if (entry.dirty || entry.used) { // TODO: multi
-				pageTable[entry.vpn].dirty = entry.dirty;
-				pageTable[entry.vpn].used = entry.used;
+			if (entry.dirty || entry.used) {
+				TranslationEntry PTE = VMKernel.swapper.getIPT().getPage(entry.ppn).process.pageTable[entry.vpn];
+				PTE.dirty = entry.dirty;
+				PTE.used = entry.used;
 			}
 		}
 		

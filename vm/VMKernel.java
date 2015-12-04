@@ -25,13 +25,14 @@ public class VMKernel extends UserKernel {
 	public void initialize(String[] args) {
 		super.initialize(args);
 		swapper = new Swapper();
+		swapLock = new Lock();
 	}
 
 	/**
 	 * Test this kernel.
 	 */
 	public void selfTest() {
-		//super.selfTest();
+		// super.selfTest();
 	}
 
 	/**
@@ -45,63 +46,71 @@ public class VMKernel extends UserKernel {
 	 * Terminate this kernel. Never returns.
 	 */
 	public void terminate() {
-		//swapper.close();
+		swapper.close();
 		super.terminate();
 	}
-	
+
 	public class Swapper {
 		public Swapper() {
-			swapperinos = ThreadedKernel.fileSystem.open("swapperinos", true); // TODO: remove later
+			// Remove pre-existing swap file
+			swapperinos = ThreadedKernel.fileSystem.open("swapperinos", true);
 			close();
 			swapperinos = ThreadedKernel.fileSystem.open("swapperinos", true);
 			swapPages = new LinkedList<Boolean>();
 			this.ipt = new IPT(Machine.processor().getNumPhysPages());
 		}
-		
+
 		public IPT getIPT() {
 			return ipt;
 		}
-		
-		public boolean inSwapFile(TranslationEntry entry, int [] spns) {
+
+		public boolean inSwapFile(TranslationEntry entry, int[] spns) {
 			return !entry.valid && spns[entry.vpn] >= 0;
 		}
-		
+
 		public void readSwap(int spn, int ppn) {
+			swapLock.acquire();
 			swapPages.set(spn, true);
 			byte[] memory = Machine.processor().getMemory();
-			swapperinos.read(spn * Processor.pageSize, memory, ppn * Processor.pageSize, Processor.pageSize);
-			Machine.stats.numSwapReads++;
+			swapperinos.read(spn * Processor.pageSize, memory, ppn
+					* Processor.pageSize, Processor.pageSize);
+			swapLock.release();
 		}
-		
-		public int writeSwap(int ppn) {Machine.stats.numSwapWrites++;
+
+		public int writeSwap(int ppn) {
+
+			swapLock.acquire();
 			int pos;
 			int size = swapPages.size();
-			
+
 			// Search for an open page
 			for (pos = 0; pos < size; pos++) {
-				if (swapPages.get(pos))
-				{
+				if (swapPages.get(pos)) {
 					swapPages.set(pos, false);
 					break;
 				}
 			}
-			
+
 			// Grow swap file if necessary
 			if (pos == size)
 				swapPages.add(false);
-			
+
 			// Write to swap file
 			byte[] memory = Machine.processor().getMemory();
-			swapperinos.write(pos * Processor.pageSize, memory, ppn * Processor.pageSize, Processor.pageSize);
+			swapperinos.write(pos * Processor.pageSize, memory, ppn
+					* Processor.pageSize, Processor.pageSize);
+			swapLock.release();
 			return pos;
 		}
-		
+
 		public void close() {
 			swapperinos.close();
 			ThreadedKernel.fileSystem.remove("swapperinos");
 		}
+
 		private OpenFile swapperinos;
-		private LinkedList<Boolean> swapPages; // Keeps track of which pages are free
+		private LinkedList<Boolean> swapPages; // Keeps track of which pages are
+												// free
 		private IPT ipt;
 	}
 
@@ -110,40 +119,85 @@ public class VMKernel extends UserKernel {
 		public IPT(int size) {
 			victim = 0;
 			pages = new PageFrame[size];
+			pageLock = new Lock();
+			pinnedPages = 0;
+			pinCountLock = new Lock();
+			pinLock = new Lock();
+			canPin = new Condition(pinLock);
 		}
-		
+
 		public void update(int ppn, VMProcess process, TranslationEntry entry) {
+			pageLock.acquire();
 			pages[ppn] = new PageFrame(process, entry);
+			pageLock.release();
 		}
-		
+
 		public PageFrame getPage(int ppn) {
-			if (ppn < 0 || ppn >= pages.length)
+			pageLock.acquire();
+			if (ppn < 0 || ppn >= pages.length) {
+				pageLock.release();
 				return null;
+			}
+			pageLock.release();
 			return pages[ppn];
 		}
-		
+
 		public VMProcess getProcess(int ppn) {
 			return pages[ppn].process;
 		}
-		
+
 		public int getVPN(int ppn) {
 			return pages[ppn].entry.vpn;
 		}
-		
-		public int getPPN() { // TODO: handle pinned pages -> call condition.sleep() on the process, call wake when number of pinned pages <
-			if (!VMKernel.freePages.isEmpty())
+
+		public int getPPN() {
+			pinLock.acquire();
+			while (pinnedPages >= Machine.processor().getNumPhysPages())
+				canPin.sleep();
+			if (!VMKernel.freePages.isEmpty()) {
+				pinLock.release();
 				return (int) VMKernel.freePages.removeFirst();
-			while (pages[victim].entry.used && victim < pages.length - 1) {
+			}
+			while (pages[victim].entry.used && victim < pages.length - 1
+					&& pages[victim].pinCount == 0) {
 				pages[victim].entry.used = false;
 				victim = (victim + 1) % pages.length;
 			}
 			int evict = victim;
 			victim = (victim + 1) % pages.length;
+			pinLock.release();
 			return evict;
 		}
 		
+		public void pin(int ppn) {
+			pinCountLock.acquire();
+			getPage(ppn).pinCount++;
+			pinnedPages++;
+			pinCountLock.release();
+		}
+		
+		public void unpin(int ppn) {
+			pinLock.acquire();
+			PageFrame page = getPage(ppn);
+			if (page != null && page.pinCount > 0) {
+				pinCountLock.acquire();
+				getPage(ppn).pinCount--;
+				pinCountLock.release();
+				if (getPage(ppn).pinCount == 0) {
+					pinnedPages--;
+					canPin.wake();
+				}
+			}
+			pinLock.release();
+		}
+
 		private int victim;
+		private Lock pageLock;
 		private PageFrame[] pages;
+		private int pinnedPages;
+		private Lock pinCountLock;
+		private Lock pinLock;
+		private Condition canPin;
 	}
 
 	public class PageFrame {
@@ -158,7 +212,9 @@ public class VMKernel extends UserKernel {
 		public int pinCount;
 
 	}
-	
+
+	public static Lock swapLock;
+
 	public static Swapper swapper;
 
 	// dummy variables to make javac smarter

@@ -38,6 +38,8 @@ public class UserProcess {
 
 		for (int i = 2; i < maxFiles; i++)
 			fileTable[i] = null;
+		
+		pteLock = new Lock();
 	}
 
 	/**
@@ -172,6 +174,8 @@ public class UserProcess {
 
 			int transfer = Math.min(length, pageSize - off);
 
+			if (!pageTable[vpn].valid)
+				handlePageFault(vpn);
 			int ppn = pinVirtualPage(vpn, false);
 			if (ppn == -1)
 				break;
@@ -272,10 +276,13 @@ public class UserProcess {
 
 		entry.used = true;
 
+		VMKernel.swapper.getIPT().pin(pageTable[vpn].ppn);
+
 		return entry.ppn;
 	}
 
 	protected void unpinVirtualPage(int vpn) {
+		VMKernel.swapper.getIPT().unpin(pageTable[vpn].ppn);
 	}
 
 	/**
@@ -450,6 +457,8 @@ public class UserProcess {
 	private int handleHalt() {
 		if (processID != 0)
 			return -1;
+		
+		Kernel.kernel.terminate();
 
 		Machine.halt();
 
@@ -457,7 +466,7 @@ public class UserProcess {
 		return 0;
 	}
 
-	protected int handleExit(int status) { System.out.println("status = " + status); // TODO: remove
+	protected int handleExit(int status) { if (debug) System.out.println("status = " + status); // TODO: remove
 		for (int i = 0; i < maxFiles; i++)
 			handleClose(i);
 
@@ -811,48 +820,37 @@ public class UserProcess {
 			Lib.assertNotReached("Unexpected exception");
 		}
 	}
-public boolean debug = false; public boolean PTE_debug = false;
+public boolean debug = false;
 	protected TranslationEntry handlePageFault(int vpn) {
-		Machine.stats.numPageFaults++;
 		VMKernel.Swapper swapper = VMKernel.swapper;
 		VMKernel.IPT ipt = swapper.getIPT();
 		int ppn = ipt.getPPN();
 		int out = -1;
 		if (ipt.getPage(ppn) != null)
 			out = ipt.getVPN(ppn);
-
-		for (int i = 0; i < numPages; i++)
-			if (PTE_debug)
-				System.out.println("PTE vpn: " + pageTable[i].vpn + " ppn: "
-					+ pageTable[i].ppn + " valid: " + pageTable[i].valid
-					+ " readOnly: " + pageTable[i].readOnly + " dirty: "
-					+ pageTable[i].dirty);
+		
 		// Evict PTE if memory is full
 		if (out >= 0) {
-			pageTable[out].valid = false;
-			syncTLB(pageTable[out]);
+			VMProcess process = ipt.getPage(ppn).process;
+			process.pteLock.acquire();
+			process.pageTable[out].valid = false;
+			syncTLB(process.pageTable[out]);
 
-			String s; // Write to swap file if page is dirty
-			if (pageTable[out].dirty) {
-				spns[out] = swapper.writeSwap(ppn);
-				pageTable[out].valid = false;
-				s = "swapping out vpn " + out + " to spn "
-						+ spns[out] + " for page " + vpn;
-				if (debug)
-					System.out.println(s);
+			// Write to swap file if page is dirty
+			if (process.pageTable[out].dirty) {
+				process.spns[out] = swapper.writeSwap(ppn);
+				unpinVirtualPage(vpn);
+				process.pageTable[out].valid = false;
 			}
+			process.pteLock.release();
 		}
 
 		// Check if page is in swap file, otherwise load page
+		pteLock.acquire();
 		if (swapper.inSwapFile(pageTable[vpn], spns)) {
-			String s = "swapping in vpn " + pageTable[vpn].vpn + " from spn "
-					+ spns[vpn] + ": ";
 			swapper.readSwap(spns[vpn], ppn);
 			pageTable[vpn].valid = true;
 			pageTable[vpn].ppn = ppn;
-			s += "ppn " + pageTable[vpn].ppn;
-			if (debug)
-				System.out.println(s);
 		} else {
 			switch (map.vpns[vpn]) {
 			case SectionMap.CODE:
@@ -866,9 +864,10 @@ public boolean debug = false; public boolean PTE_debug = false;
 				break;
 			}
 		}
+		pteLock.release();
 
 		// Sync
-		ipt.update(pageTable[vpn].ppn, (VMProcess) this, new TranslationEntry(
+		ipt.update(ppn, (VMProcess) this, new TranslationEntry(
 				pageTable[vpn]));
 		syncTLB(pageTable[vpn]);
 		return pageTable[vpn];
@@ -887,7 +886,6 @@ public boolean debug = false; public boolean PTE_debug = false;
 	}
 
 	protected void allocateCodePage(int vpn, int ppn) {
-		Machine.stats.numCOFFReads++;
 		CoffSection section = coff.getSection(coffPages[vpn].section);
 		section.loadPage(coffPages[vpn].spn, ppn);
 		pageTable[vpn] = new TranslationEntry(vpn, ppn, true, true, false,
@@ -895,7 +893,6 @@ public boolean debug = false; public boolean PTE_debug = false;
 	}
 
 	protected void allocateDataPage(int vpn, int ppn) {
-		Machine.stats.numCOFFReads++;
 		CoffSection section = coff.getSection(coffPages[vpn].section);
 		section.loadPage(coffPages[vpn].spn, ppn);
 		pageTable[vpn] = new TranslationEntry(vpn, ppn, true, false, false,
@@ -942,6 +939,8 @@ public boolean debug = false; public boolean PTE_debug = false;
 		public static final int DATA = 1;
 		public static final int STACK = 2;
 	}
+	
+	protected Lock pteLock;
 	
 	/** Track swap file page number */
 	protected int spns[];
