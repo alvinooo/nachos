@@ -119,6 +119,8 @@ public class VMKernel extends UserKernel {
 		public IPT(int size) {
 			victim = 0;
 			pages = new PageFrame[size];
+			for (int i = 0; i < size; i++)
+				pages[i] = new PageFrame(null, new TranslationEntry(0, 0, false, false, false, false));
 			pageLock = new Lock();
 			pinnedPages = 0;
 			pinCountLock = new Lock();

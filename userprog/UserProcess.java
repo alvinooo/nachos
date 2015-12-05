@@ -276,13 +276,18 @@ public class UserProcess {
 
 		entry.used = true;
 
-		VMKernel.swapper.getIPT().pin(pageTable[vpn].ppn);
+		VMKernel.Swapper swapper = VMKernel.swapper;
+		if (swapper != null)
+			swapper.getIPT().pin(pageTable[vpn].ppn);
 
 		return entry.ppn;
 	}
 
 	protected void unpinVirtualPage(int vpn) {
-		VMKernel.swapper.getIPT().unpin(pageTable[vpn].ppn);
+
+		VMKernel.Swapper swapper = VMKernel.swapper;
+		if (swapper != null)
+			swapper.getIPT().unpin(pageTable[vpn].ppn);
 	}
 
 	/**
@@ -465,7 +470,7 @@ public class UserProcess {
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
 		return 0;
 	}
-
+public boolean debug = false;
 	protected int handleExit(int status) { if (debug) System.out.println("status = " + status); // TODO: remove
 		for (int i = 0; i < maxFiles; i++)
 			handleClose(i);
@@ -820,7 +825,7 @@ public class UserProcess {
 			Lib.assertNotReached("Unexpected exception");
 		}
 	}
-public boolean debug = false;
+
 	protected TranslationEntry handlePageFault(int vpn) {
 		VMKernel.Swapper swapper = VMKernel.swapper;
 		VMKernel.IPT ipt = swapper.getIPT();
@@ -832,6 +837,8 @@ public boolean debug = false;
 		// Evict PTE if memory is full
 		if (out >= 0) {
 			VMProcess process = ipt.getPage(ppn).process;
+			if (process == null)
+				process = (VMProcess) this;
 			process.pteLock.acquire();
 			process.pageTable[out].valid = false;
 			syncTLB(process.pageTable[out]);
