@@ -27,9 +27,9 @@ public class VMProcess extends UserProcess {
 		Processor processor = Machine.processor();
 		int TLBsize = processor.getTLBSize();
 		for (int i = 0; i < TLBsize; i++) {
-			TranslationEntry entry = new TranslationEntry();
-			entry.valid = false;
-			processor.writeTLBEntry(i, entry);
+			TranslationEntry entry = processor.readTLBEntry(i);
+			pageTable[entry.vpn] = new TranslationEntry(entry);
+			processor.writeTLBEntry(i, new TranslationEntry(0, 0, false, false, false, false));
 		}
 	}
 
@@ -102,6 +102,10 @@ public class VMProcess extends UserProcess {
 			if (pageTable[vpn].ppn >= 0)
 				VMKernel.freePages.add(new Integer(pageTable[vpn].ppn));
 		}
+		for (int spn = 0; spn < spns.length; spn++) {
+			if (spns[spn] != -1)
+				VMKernel.swapper.clearSwap(spn);
+		}
 	}
 
 	/**
@@ -155,11 +159,7 @@ public class VMProcess extends UserProcess {
 		// Sync w/ page table
 		for (int i = 0; i < TLBsize; i++) {
 			TranslationEntry entry = processor.readTLBEntry(i);
-			if (entry.dirty || entry.used) {
-				TranslationEntry PTE = VMKernel.swapper.getIPT().getPage(entry.ppn).process.pageTable[entry.vpn];
-				PTE.dirty = entry.dirty;
-				PTE.used = entry.used;
-			}
+			pageTable[entry.vpn] = new TranslationEntry(entry);
 		}
 		
 		// Find a page to bring in

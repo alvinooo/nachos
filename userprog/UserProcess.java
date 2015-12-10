@@ -470,8 +470,8 @@ public class UserProcess {
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
 		return 0;
 	}
-public boolean debug = false;
-	protected int handleExit(int status) { if (debug) System.out.println("status = " + status); // TODO: remove
+	
+	protected int handleExit(int status) { if (false) System.out.println("status = " + status); // TODO: remove
 		for (int i = 0; i < maxFiles; i++)
 			handleClose(i);
 
@@ -835,16 +835,17 @@ public boolean debug = false;
 			out = ipt.getVPN(ppn);
 		
 		// Evict PTE if memory is full
-		if (out >= 0) {
-			VMProcess process = ipt.getPage(ppn).process;
+VMProcess process = null;		if (out >= 0) {
+			process = ipt.getPage(ppn).process;
 			if (process == null)
 				process = (VMProcess) this;
 			process.pteLock.acquire();
 			process.pageTable[out].valid = false;
-			syncTLB(process.pageTable[out]);
+			PTE2TLB(process.pageTable[out]);
 
 			// Write to swap file if page is dirty
 			if (process.pageTable[out].dirty) {
+				pinVirtualPage(vpn, false);
 				process.spns[out] = swapper.writeSwap(ppn);
 				unpinVirtualPage(vpn);
 				process.pageTable[out].valid = false;
@@ -855,7 +856,9 @@ public boolean debug = false;
 		// Check if page is in swap file, otherwise load page
 		pteLock.acquire();
 		if (swapper.inSwapFile(pageTable[vpn], spns)) {
+			pinVirtualPage(vpn, true);
 			swapper.readSwap(spns[vpn], ppn);
+			unpinVirtualPage(vpn);
 			pageTable[vpn].valid = true;
 			pageTable[vpn].ppn = ppn;
 		} else {
@@ -872,20 +875,20 @@ public boolean debug = false;
 			}
 		}
 		pteLock.release();
-
+if (false) System.out.println(vpn + " from " + processID + " replacing " + out + " from " + process.processID);
 		// Sync
 		ipt.update(ppn, (VMProcess) this, new TranslationEntry(
 				pageTable[vpn]));
-		syncTLB(pageTable[vpn]);
+		PTE2TLB(pageTable[vpn]);
 		return pageTable[vpn];
 	}
 	
-	protected void syncTLB(TranslationEntry entry) {
+	protected void PTE2TLB(TranslationEntry entry) {
 		Processor processor = Machine.processor();
 		for (int i = 0; i < processor.getTLBSize(); i++) {
 			TranslationEntry TLBEntry = processor.readTLBEntry(i);
-			if (TLBEntry.vpn == entry.vpn && TLBEntry.ppn == entry.ppn) {
-				TLBEntry.valid = false;
+			if (TLBEntry.vpn == entry.vpn) {
+				TLBEntry = new TranslationEntry(entry);
 				processor.writeTLBEntry(i, TLBEntry);
 				break;
 			}
@@ -969,8 +972,8 @@ public boolean debug = false;
 	private int initialPC, initialSP;
 	private int argc, argv;
 
-	private UserProcess parentProcess = null;
-	private int processID;
+	protected UserProcess parentProcess = null;
+	protected int processID;
 
 	private HashSet childProcesses = new HashSet();
 	private HashMap exitStatusTable = new HashMap();

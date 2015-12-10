@@ -41,6 +41,7 @@ public class UserKernel extends ThreadedKernel {
      * Test the console device.
      */	
     public void selfTest() {
+/*
 	super.selfTest();
 
 	System.out.println("Testing the console device. Typed characters");
@@ -55,6 +56,7 @@ public class UserKernel extends ThreadedKernel {
 	while (c != 'q');
 
 	System.out.println("");
+*/
     }
 
     /**

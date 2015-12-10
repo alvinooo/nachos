@@ -64,13 +64,19 @@ public class VMKernel extends UserKernel {
 			return ipt;
 		}
 
+		public void clearSwap(int spn) {
+			swapLock.acquire();
+			if (spn < swapPages.size())
+				swapPages.set(spn, true);
+			swapLock.release();
+		}
+
 		public boolean inSwapFile(TranslationEntry entry, int[] spns) {
 			return !entry.valid && spns[entry.vpn] >= 0;
 		}
 
 		public void readSwap(int spn, int ppn) {
 			swapLock.acquire();
-			swapPages.set(spn, true);
 			byte[] memory = Machine.processor().getMemory();
 			swapperinos.read(spn * Processor.pageSize, memory, ppn
 					* Processor.pageSize, Processor.pageSize);
@@ -105,7 +111,7 @@ public class VMKernel extends UserKernel {
 
 		public void close() {
 			swapperinos.close();
-			ThreadedKernel.fileSystem.remove("swapperinos");
+			// TODO: uncomment ThreadedKernel.fileSystem.remove("swapperinos");
 		}
 
 		private OpenFile swapperinos;
@@ -181,15 +187,15 @@ public class VMKernel extends UserKernel {
 		public void unpin(int ppn) {
 			pinLock.acquire();
 			PageFrame page = getPage(ppn);
+			pinCountLock.acquire();
 			if (page != null && page.pinCount > 0) {
-				pinCountLock.acquire();
 				getPage(ppn).pinCount--;
-				pinCountLock.release();
 				if (getPage(ppn).pinCount == 0) {
 					pinnedPages--;
 					canPin.wake();
 				}
 			}
+			pinCountLock.release();
 			pinLock.release();
 		}
 
