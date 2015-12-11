@@ -225,16 +225,15 @@ main ()
 	printf ("...failed (r = %d)\n", r);
     }
 
-    printf ("writing with a buffer that extends beyond the end of the\n");
-    printf ("address space.  Nachos should stop at the end and return the\n");
-    printf ("number of bytes written.  coincidentally, given the way write\n");
-    printf ("is invoked, this literally copies the current contents of the\n");
-    printf ("entire address space to the file.\n");
+    printf("writing with a buffer that extends beyond the end of the\n");
+    printf ("address space.  either return -1 or truncate the operation\n");
+    printf ("and stop at the end and return the number of bytes written.\n");
+    printf ("we will accept both behaviors.\n");
     r = write (fd, (char *) 0, (80 * 1024));
-    if (r <= 0) {
-	printf ("...failed (r = %d)\n", r);
+    if (r == (80 * 1024)) {
+      printf ("...failed (r = %d)\n", r);
     } else {
-	printf ("...likely passed, check r (r = %d)\n", r);
+      printf ("...likely passed, check r (r = %d)\n", r);
     }
     return 0;
 }

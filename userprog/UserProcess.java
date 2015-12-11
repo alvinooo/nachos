@@ -7,6 +7,7 @@ import nachos.vm.VMKernel;
 import nachos.vm.VMProcess;
 
 import java.io.EOFException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 
@@ -471,7 +472,7 @@ public class UserProcess {
 		return 0;
 	}
 	
-	protected int handleExit(int status) { if (false) System.out.println("status = " + status); // TODO: remove
+	protected int handleExit(int status) { if (true) System.out.println("status = " + status); // TODO: remove
 		for (int i = 0; i < maxFiles; i++)
 			handleClose(i);
 
@@ -833,9 +834,10 @@ public class UserProcess {
 		int out = -1;
 		if (ipt.getPage(ppn) != null)
 			out = ipt.getVPN(ppn);
-		
+		boolean debugSwap = false;
 		// Evict PTE if memory is full
-VMProcess process = null;		if (out >= 0) {
+		VMProcess process = null;
+		if (out >= 0) {
 			process = ipt.getPage(ppn).process;
 			if (process == null)
 				process = (VMProcess) this;
@@ -846,7 +848,7 @@ VMProcess process = null;		if (out >= 0) {
 			// Write to swap file if page is dirty
 			if (process.pageTable[out].dirty) {
 				pinVirtualPage(vpn, false);
-				process.spns[out] = swapper.writeSwap(ppn);
+				process.spns[out] = swapper.writeSwap(ppn); if (debugSwap) System.out.println(process.processID + " writing " + process.spns[out] + " " + Arrays.toString(spns));
 				unpinVirtualPage(vpn);
 				process.pageTable[out].valid = false;
 			}
@@ -857,7 +859,7 @@ VMProcess process = null;		if (out >= 0) {
 		pteLock.acquire();
 		if (swapper.inSwapFile(pageTable[vpn], spns)) {
 			pinVirtualPage(vpn, true);
-			swapper.readSwap(spns[vpn], ppn);
+			swapper.readSwap(spns[vpn], ppn);if (debugSwap) System.out.println(processID + " reading " + spns[vpn] + " " + Arrays.toString(spns));
 			unpinVirtualPage(vpn);
 			pageTable[vpn].valid = true;
 			pageTable[vpn].ppn = ppn;
@@ -875,7 +877,7 @@ VMProcess process = null;		if (out >= 0) {
 			}
 		}
 		pteLock.release();
-if (false) System.out.println(vpn + " from " + processID + " replacing " + out + " from " + process.processID);
+
 		// Sync
 		ipt.update(ppn, (VMProcess) this, new TranslationEntry(
 				pageTable[vpn]));

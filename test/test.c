@@ -1,9 +1,10 @@
 #include "syscall.h"
+#include "stdio.h"
+#include "stdlib.h"
 
 int main(int argc, char** argv)
 {
   char buffer[10];
-  char input[1];
   int bytes;
   int fd = creat("test.txt");
   if (fd == -1) {
@@ -35,13 +36,23 @@ int main(int argc, char** argv)
     printf("why r u still here?\n");
     return 0;
   }
-  while (1) {
-    read(0, input, 1);
-    printf("%s", input);
-    if (input[0] == 'q')
-      break;
+  printf("Testing exec\n");
+  int PID;
+  int *ptr;
+  PID = exec("write1.coff", 0, 0);
+  if (PID == -1)
+  {
+    printf("Exec failed\n");
+    return 0;
+  }
+  int joinstatus = join(PID, ptr);
+  if (joinstatus == 0)
+  {
+    printf("write1 unhandled exception\n");
+    return 0;
   }
   printf("TESTS PASSED\n");
-  halt();
+  close(1);
+  printf("This shouldn't print\n");
   return 0;
 }
