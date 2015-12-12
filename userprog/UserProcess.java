@@ -831,19 +831,16 @@ public class UserProcess {
 		VMKernel.Swapper swapper = VMKernel.swapper;
 		VMKernel.IPT ipt = swapper.getIPT();
 		int ppn = ipt.getPPN();
-		int out = -1;
-		if (ipt.getPage(ppn) != null)
-			out = ipt.getVPN(ppn);
-boolean debugSwap = true;
+boolean debugFault = false; boolean debugSwap = false;
 		// Evict PTE if memory is full
-		VMProcess process = null;
-		if (out >= 0) {
-			process = ipt.getPage(ppn).process;
+
+		if (ipt.getPage(ppn).entry.valid) {
+			int out = ipt.getVPN(ppn);
+			VMProcess process = ipt.getPage(ppn).process;
 			if (process == null)
 				process = (VMProcess) this;
 			process.pteLock.acquire();
-			process.pageTable[out].valid = false;
-			PTE2TLB(process.pageTable[out]);
+			process.pageTable[out].valid = false; if (debugFault) System.out.println(process.processID + " evicting: " + out);
 
 			// Write to swap file if page is dirty
 			if (process.pageTable[out].dirty) {
@@ -852,6 +849,7 @@ boolean debugSwap = true;
 				unpinVirtualPage(vpn);
 				process.pageTable[out].valid = false;
 			}
+			PTE2TLB(process.pageTable[out]);
 			process.pteLock.release();
 		}
 
@@ -876,7 +874,7 @@ boolean debugSwap = true;
 				break;
 			}
 		}
-		pteLock.release();
+		pteLock.release(); if (debugFault) System.out.println(processID + " bringing in: " + vpn);
 
 		// Sync
 		ipt.update(ppn, (VMProcess) this, new TranslationEntry(
@@ -889,7 +887,7 @@ boolean debugSwap = true;
 		Processor processor = Machine.processor();
 		for (int i = 0; i < processor.getTLBSize(); i++) {
 			TranslationEntry TLBEntry = processor.readTLBEntry(i);
-			if (TLBEntry.vpn == entry.vpn) {
+			if (TLBEntry.valid && TLBEntry.vpn == entry.vpn) {
 				TLBEntry = new TranslationEntry(entry);
 				processor.writeTLBEntry(i, TLBEntry);
 				break;

@@ -153,10 +153,11 @@ public class VMProcess extends UserProcess {
 				break;
 			}
 		}
-
+TranslationEntry tmp = processor.readTLBEntry(lastReplaced); if (false && found) System.out.println("missing " + vpn + " , evicting " + tmp.vpn + " in TLB index " + lastReplaced);
 		// Otherwise evict a page you haven't just brought in
-		if (!found)
+		if (!found) {
 			lastReplaced = (lastReplaced + 1) % TLBsize;
+		}
 		
 		// Sync w/ page table
 		for (int i = 0; i < TLBsize; i++) {
@@ -164,7 +165,7 @@ public class VMProcess extends UserProcess {
 			pageTable[entry.vpn].dirty = pageTable[entry.vpn].dirty || entry.dirty;
 			pageTable[entry.vpn].used = pageTable[entry.vpn].used || entry.used;
 		}
-		
+
 		// Find a page to bring in
 		if (vpn > 10000)
 			System.out.println("wtf");
