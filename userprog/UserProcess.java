@@ -834,7 +834,7 @@ public class UserProcess {
 		int out = -1;
 		if (ipt.getPage(ppn) != null)
 			out = ipt.getVPN(ppn);
-		boolean debugSwap = false;
+boolean debugSwap = true;
 		// Evict PTE if memory is full
 		VMProcess process = null;
 		if (out >= 0) {
@@ -848,7 +848,7 @@ public class UserProcess {
 			// Write to swap file if page is dirty
 			if (process.pageTable[out].dirty) {
 				pinVirtualPage(vpn, false);
-				process.spns[out] = swapper.writeSwap(ppn); if (debugSwap) System.out.println(process.processID + " writing " + process.spns[out] + " " + Arrays.toString(spns));
+				process.spns[out] = swapper.writeSwap(process.spns[out], ppn); if (debugSwap) System.out.println(process.processID + " writing " + process.spns[out] + " " + Arrays.toString(process.spns));
 				unpinVirtualPage(vpn);
 				process.pageTable[out].valid = false;
 			}

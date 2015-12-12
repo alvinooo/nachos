@@ -29,8 +29,8 @@ public class VMProcess extends UserProcess {
 		for (int i = 0; i < TLBsize; i++) {
 			TranslationEntry entry = processor.readTLBEntry(i);
 			pageTable[entry.vpn] = new TranslationEntry(entry);
-			pageTable[entry.vpn].dirty |= entry.dirty;
-			pageTable[entry.vpn].used |= entry.used;
+			pageTable[entry.vpn].dirty = pageTable[entry.vpn].dirty || entry.dirty;
+			pageTable[entry.vpn].used = pageTable[entry.vpn].used || entry.used;
 			processor.writeTLBEntry(i, new TranslationEntry(0, 0, false, false, false, false));
 		}
 	}
@@ -161,8 +161,8 @@ public class VMProcess extends UserProcess {
 		// Sync w/ page table
 		for (int i = 0; i < TLBsize; i++) {
 			TranslationEntry entry = processor.readTLBEntry(i);
-			pageTable[entry.vpn].dirty |= entry.dirty;
-			pageTable[entry.vpn].used |= entry.used;
+			pageTable[entry.vpn].dirty = pageTable[entry.vpn].dirty || entry.dirty;
+			pageTable[entry.vpn].used = pageTable[entry.vpn].used || entry.used;
 		}
 		
 		// Find a page to bring in

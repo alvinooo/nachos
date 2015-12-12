@@ -83,23 +83,25 @@ public class VMKernel extends UserKernel {
 			swapLock.release();
 		}
 
-		public int writeSwap(int ppn) {
+		public int writeSwap(int spn, int ppn) {
 
 			swapLock.acquire();
-			int pos;
-			int size = swapPages.size();
+			int pos = spn;
+			if (spn == -1) {
+				int size = swapPages.size();
 
-			// Search for an open page
-			for (pos = 0; pos < size; pos++) {
-				if (swapPages.get(pos)) {
-					swapPages.set(pos, false);
-					break;
+				// Search for an open page
+				for (pos = 0; pos < size; pos++) {
+					if (swapPages.get(pos)) {
+						swapPages.set(pos, false);
+						break;
+					}
 				}
+	
+				// Grow swap file if necessary
+				if (pos == size)
+					swapPages.add(false);
 			}
-
-			// Grow swap file if necessary
-			if (pos == size)
-				swapPages.add(false);
 
 			// Write to swap file
 			byte[] memory = Machine.processor().getMemory();
