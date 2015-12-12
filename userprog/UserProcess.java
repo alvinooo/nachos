@@ -859,7 +859,7 @@ public class UserProcess {
 		pteLock.acquire();
 		if (swapper.inSwapFile(pageTable[vpn], spns)) {
 			pinVirtualPage(vpn, true);
-			swapper.readSwap(spns[vpn], ppn);if (debugSwap) System.out.println(processID + " reading " + spns[vpn] + " " + Arrays.toString(spns));
+			swapper.readSwap(spns[vpn], ppn); if (debugSwap) System.out.println(processID + " reading " + spns[vpn] + " " + Arrays.toString(spns));
 			unpinVirtualPage(vpn);
 			pageTable[vpn].valid = true;
 			pageTable[vpn].ppn = ppn;
